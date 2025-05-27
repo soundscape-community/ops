@@ -1,0 +1,93 @@
+
+services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: docker-socket-proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+    networks:
+      - docker-socket-proxy
+  
+
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus-storage:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - '9090:9090'
+    networks:
+      - monitoring
+      - docker-socket-proxy
+
+  grafana:
+    image: grafana/grafana-oss
+    container_name: grafana
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - grafana-storage:/var/lib/grafana
+    ports:
+      - '3000:3000'
+    networks:
+      - monitoring
+
+  node-exporter:
+    image: prom/node-exporter
+    container_name: node-exporter
+    expose:
+      - 9100
+    ports:
+      - '9100:9100'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc|run/user)($$|/)'
+      - '--collector.systemd'
+      - '--collector.processes'
+    labels:
+      prometheus.io/scrape: 'true'
+      prometheus.io/port: '9100'
+    networks:
+      - monitoring
+    hostname: node1
+
+  docker-exporter:
+    image: ghcr.io/davidborzek/docker-exporter:latest
+    container_name: docker-exporter
+    environment:
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+    expose:
+      - "8080"
+    networks:
+      - monitoring
+      - docker-socket-proxy
+    restart: unless-stopped
+    labels:
+      prometheus.io/scrape: 'true'
+      prometheus.io/port: '8080'
+
+
+networks:
+  monitoring:
+    name: monitoring
+  docker-socket-proxy:
+    name: docker-socket-proxy
+
+volumes:
+  grafana-storage:
+    name: grafana-storage
+  prometheus-storage:
+    name: prometheus-storage
+    
