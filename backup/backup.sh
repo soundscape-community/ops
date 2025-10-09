@@ -51,6 +51,7 @@ run_restic_backup() {
   if [ ${exit_code} -ne 0 ]; then
     # Move log to permanent location on failure
     chmod 644 ${temp_log}
+    mv "${temp_log}" "${LOG_DIR}/${log_filename}"
     local log_url="${LOG_BASE_URL}/${log_filename}"
     notify "high" "Backup failed: ${job_name}" "${log_url}"
     return 1
