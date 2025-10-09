@@ -6,7 +6,7 @@ export RESTIC_REPOSITORY='sftp://u497612@u497612.your-storagebox.de:23/restic'
 NTFY_TOPIC="soundscape-community-backup"
 
 # Base URL for log file access
-LOG_BASE_URL="https://ntfy.soundscape.services"
+LOG_BASE_URL="https://ntfy.soundscape.services/backup"
 
 # Log directory
 LOG_DIR="/home/soundscape/.local/var/log/backup"
