@@ -24,6 +24,3 @@ echo ""
 echo "Installation complete! Timer status:"
 sudo systemctl status soundscape-backup.timer --no-pager
 
-echo ""
-echo "To check when the next backup is scheduled, run:"
-echo "  systemctl list-timers soundscape-backup.timer"
