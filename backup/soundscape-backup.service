@@ -1,0 +1,13 @@
+[Unit]
+Description=Soundscape Backup Service
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=soundscape
+Group=soundscape
+ExecStart=/home/soundscape/ops/backup/backup.sh
+WorkingDirectory=/home/soundscape/ops/backup
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=soundscape-backup

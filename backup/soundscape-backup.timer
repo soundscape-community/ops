@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Soundscape Backup Nightly
+Requires=soundscape-backup.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
