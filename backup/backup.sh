@@ -6,7 +6,7 @@ export RESTIC_REPOSITORY='sftp://u497612@u497612.your-storagebox.de:23/restic'
 NTFY_TOPIC="soundscape-community-backup"
 
 # Base URL for log file access
-LOG_BASE_URL="https://share.soundscape.services/backup-logs"
+LOG_BASE_URL="https://ntfy.soundscape.services"
 
 # Log directory
 LOG_DIR="/home/soundscape/.local/var/log/backup"
@@ -28,6 +28,11 @@ notify() {
   fi
 }
 
+# Function to generate random string for log filename
+generate_random_suffix() {
+  head -c 4 /dev/urandom | base32 | head -c 4
+}
+
 # Function to run restic with logging and error handling
 run_restic_backup() {
   local job_name="${1}"
@@ -35,7 +40,8 @@ run_restic_backup() {
   local restic_args=("$@")
   
   local timestamp=$(date +%Y%m%d_%H%M)
-  local log_filename="${job_name}_${timestamp}.txt"
+  local random_suffix=$(generate_random_suffix)
+  local log_filename="${job_name}_${timestamp}_${random_suffix}.txt"
   local temp_log=$(mktemp)
   
   # Run restic and capture output
