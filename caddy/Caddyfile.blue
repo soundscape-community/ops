@@ -1,0 +1,43 @@
+# Caddy configuration file for Soundscape back-end services 
+
+# There are two Caddy configuration files that should be placed in /etc/caddy on
+# the server. A symbolic link /etc/caddy/Caddyfile points to the current active
+# configuration. The only difference between the two configurations is the port
+# number to forward the request to, 8081 for blue and 8082 for green.
+
+(cors) {
+  @origin{args.0} header Origin {args.0}
+  header @origin{args.0} Access-Control-Allow-Origin "{args.0}"
+  header @origin{args.0} Vary Origin
+}
+
+tiles.soundscape.services {
+    reverse_proxy localhost:8081 {
+        header_up X-Real-IP {remote_host}
+    }
+    header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+    header Access-Control-Allow-Methods "GET"
+    header Access-Control-Allow-Headers "*"
+
+    # Allow requests coming from the Soundscape web client hosted on Github
+    import cors https://soundscape-community.github.io
+
+    # JSON Logging with automatic rotation
+    log {
+        output file /var/log/caddy/tiles.access.log {
+            roll_size     5MB       # Rotate when file reaches 5MB
+            roll_keep     5          # Keep last 5 rotated logs
+        }
+        format json
+    }
+}
+
+newprod0.openscape.io {
+    reverse_proxy localhost:8082 {
+        header_up X-Real-IP {remote_host}
+    }
+    header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+}
+
+
+import sites-enabled/*

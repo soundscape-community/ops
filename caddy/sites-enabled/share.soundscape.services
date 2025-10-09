@@ -1,0 +1,8 @@
+share.soundscape.services {                                                        
+    header /.well-known/apple-app-site-association Content-Type application/json   
+    root * /home/soundscape/share.soundscape.services/                             
+    file_server browse                                                             
+    log {                                                                          
+        output file /var/log/caddy/share.soundscape.services.access.log            
+    }                                                                              
+} 

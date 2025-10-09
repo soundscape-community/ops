@@ -1,0 +1,4 @@
+ntfy.soundscape.services {                                                        
+    root * /home/soundscape/.local/var/log                             
+    file_server
+} 

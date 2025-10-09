@@ -1,0 +1,14 @@
+https://ors-api.mur.org.uk {
+  @soundscape {
+    header User-Agent Soundscape*
+  }
+
+  reverse_proxy @soundscape https://api.openrouteservice.org {
+    header_up Host {upstream_hostport}
+    header_up Authorization "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjUzYTRlMTdjOWY4ODRhNWNiZjNiZmQwZGJmYWYxYTlmIiwiaCI6Im11cm11cjY0In0="
+  }
+
+#  respond "unauthorized" 403 {
+#    close
+#  }
+}
