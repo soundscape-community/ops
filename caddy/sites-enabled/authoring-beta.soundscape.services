@@ -1,5 +1,5 @@
-authoring2.mur.org.uk {
-    reverse_proxy localhost:8011
+authoring-beta.soundscape.services {
+    reverse_proxy localhost:8012
     handle_path /files/* {
         root * /home/soundscape/share.soundscape.services/
         file_server
