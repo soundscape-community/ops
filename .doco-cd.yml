@@ -1,0 +1,5 @@
+# yaml-language-server: $schema=https://doco.cd/latest/schemas/deploy.schema.json
+name: doco-cd
+working_dir: doco-cd
+compose_files: [compose.yaml]
+timeout: 120

@@ -1,0 +1,23 @@
+services:
+  doco-cd:
+    image: ghcr.io/kimdre/doco-cd:0.125.1@sha256:38198abbda1b55da7a7f37a7924b2ccdcc0583bd24466b7c2103ef6cd2ffc828
+    restart: unless-stopped
+    environment:
+      TZ: Europe/London
+      SELF_UPDATE_ENABLED: "true"
+      SELF_UPDATE_STRATEGY: auto
+      POLL_CONFIG: |
+        - url: https://github.com/soundscape-community/ops.git
+          reference: main
+          interval: 300
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - data:/data
+    healthcheck:
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  data:
