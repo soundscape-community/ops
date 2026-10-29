@@ -9,13 +9,16 @@ minutes and updates itself when its configuration changes. No other services are
 managed by Doco-CD yet. This public repository needs no Git credentials.
 
 Merge the configuration into `main` before bootstrapping. On a Docker host with
-no existing Doco-CD installation, run this once:
+no existing Doco-CD installation, create the persistent secrets directory first,
+then run this once:
 
 ```sh
+install -d -m 700 /home/soundscape/.secrets
 docker volume create doco-cd_data
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v doco-cd_data:/data \
+  -v /home/soundscape/.secrets:/home/soundscape/.secrets:ro \
   -e SELF_UPDATE_ENABLED=true \
   -e POLL_CONFIG='- url: https://github.com/soundscape-community/ops.git
   reference: main' \
@@ -41,3 +44,21 @@ docker stop $(docker ps -q \
 
 Stopping Doco-CD preserves its data volume. To resume, use `docker start` with
 the container ID returned by the same filters with `docker ps -aq`.
+
+## Persistent host secrets
+
+Keep production secrets outside deployment checkouts, under
+`/home/soundscape/.secrets/<project>/`. Run provisioning commands as `soundscape`;
+use mode `0700` for directories and `0600` for secret files. The file permissions
+must also allow the consuming container's UID to read them. Doco-CD mounts this
+directory read-only at the same absolute path used by the host Docker daemon.
+Only explicitly granted secret files should be mounted into application containers.
+Keep values out of Git and environment variables, and include the directory in a
+secure, access-controlled backup.
+
+Roll out secrets support in two stages. First merge and deploy the Doco-CD mount
+and bootstrap changes, creating the host directory before deployment. Verify the
+running Doco-CD container has `/home/soundscape/.secrets` mounted read-only using
+`docker inspect`. Only then merge the telemetry deployment changes: deployments
+can run concurrently, so enabling telemetry in the same rollout may race the
+Doco-CD update. Do not squash these stages into one production rollout.

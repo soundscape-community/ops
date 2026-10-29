@@ -13,6 +13,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - data:/data
+      - /home/soundscape/.secrets:/home/soundscape/.secrets:ro
     healthcheck:
       interval: 10s
       timeout: 5s
