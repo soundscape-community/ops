@@ -1,0 +1,19 @@
+services:
+  vector:
+    image: timberio/vector:0.60.0-debian@sha256:3ccb4bbd36e38734394e158db1411e91a69d076ed25013f8de385046a382d36a
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4318:4318"
+    volumes:
+      - ./vector.yaml:/etc/vector/vector.yaml:ro
+      - ./mixpanel.vrl:/etc/vector/mixpanel.vrl:ro
+      - vector-data:/var/lib/vector
+    secrets:
+      - mixpanel-token
+
+secrets:
+  mixpanel-token:
+    file: ${SECRETS_DIR:-./secrets}/mixpanel-token
+
+volumes:
+  vector-data:

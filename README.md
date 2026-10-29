@@ -1,12 +1,19 @@
 # ops
 Infrastructure to support the backend services for soundscape
 
+## Telemetry
+
+The [Vector telemetry project](telemetry/README.md) receives Soundscape
+OTLP logs and converts them for EU Mixpanel. Its project token is read from an
+ignored file at runtime. See its README for setup, tests and iOS configuration.
+
 ## Doco-CD
 
 [Doco-CD](https://github.com/kimdre/doco-cd/tree/main/examples/self-updating)
-manages its own Compose project from this repository. It polls `main` every five
-minutes and updates itself when its configuration changes. No other services are
-managed by Doco-CD yet. This public repository needs no Git credentials.
+manages its own Compose project and telemetry from this repository. It polls
+`main` every five minutes and updates projects when their configuration changes.
+This public repository needs no Git credentials. Provision telemetry secrets as
+described in [its README](telemetry/README.md) before enabling its deployment.
 
 Merge the configuration into `main` before bootstrapping. On a Docker host with
 no existing Doco-CD installation, create the persistent secrets directory first,

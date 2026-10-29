@@ -1,0 +1,27 @@
+# Abort diagnostics and component_discarded_events_total count invalid records.
+# Do not log record contents: properties can contain user data.
+name = string(.event_name) ?? ""
+attributes = object(.attributes) ?? {}
+identity = string(attributes.user_id) ?? ""
+if strip_whitespace(name) == "" || strip_whitespace(identity) == "" {
+  abort
+}
+occurred_at = timestamp!(.timestamp)
+resources = object(.resources) ?? {}
+properties = merge(resources, attributes)
+
+insert_id = string(attributes.event_id) ?? ""
+if strip_whitespace(insert_id) == "" {
+  # encode_json sorts object keys. Include original nanoseconds, never observed
+  # time or ingest metadata, so client replay produces the same ID.
+  insert_id = sha2(encode_json({
+    "event": name,
+    "timestamp_ns": to_unix_timestamp(occurred_at, unit: "nanoseconds"),
+    "resources": resources,
+    "attributes": attributes
+  }), variant: "SHA-256")
+}
+properties.distinct_id = identity
+properties.time = to_unix_timestamp(occurred_at, unit: "seconds")
+properties."$insert_id" = insert_id
+. = {"event": name, "properties": properties}

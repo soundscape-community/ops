@@ -1,0 +1,52 @@
+data_dir: /var/lib/vector
+
+secret:
+  files:
+    type: directory
+    path: /run/secrets
+    remove_trailing_whitespace: true
+
+sources:
+  otel:
+    type: opentelemetry
+    log_namespace: false
+    grpc:
+      address: 0.0.0.0:4317
+    http:
+      address: 0.0.0.0:4318
+
+transforms:
+  to_mixpanel:
+    type: remap
+    inputs: [otel.logs]
+    file: /etc/vector/mixpanel.vrl
+    drop_on_error: true
+    drop_on_abort: true
+
+sinks:
+  mixpanel:
+    type: http
+    inputs: [to_mixpanel]
+    uri: https://api-eu.mixpanel.com/import?strict=1
+    method: post
+    auth:
+      strategy: basic
+      user: SECRET[files.mixpanel-token]
+      password: ""
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    request:
+      headers:
+        Content-Type: application/x-ndjson
+    batch:
+      max_events: 2000
+      max_bytes: 5242880
+      timeout_secs: 1
+    buffer:
+      type: disk
+      max_size: 268435488
+      when_full: block
+    healthcheck:
+      enabled: false

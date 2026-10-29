@@ -1,0 +1,4 @@
+telemetry/secrets/*
+!telemetry/secrets/mixpanel-token.example
+__pycache__/
+telemetry/.env

@@ -3,3 +3,10 @@ name: doco-cd
 working_dir: doco-cd
 compose_files: [compose.yaml]
 timeout: 120
+---
+name: telemetry
+working_dir: telemetry
+compose_files: [compose.yaml]
+timeout: 120
+environment:
+  SECRETS_DIR: /home/soundscape/.secrets/telemetry
