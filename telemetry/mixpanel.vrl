@@ -2,7 +2,7 @@
 # Do not log record contents: properties can contain user data.
 name = string(.event_name) ?? ""
 attributes = object(.attributes) ?? {}
-identity = string(attributes.user_id) ?? ""
+identity = string(attributes."app.installation.id") ?? ""
 if strip_whitespace(name) == "" || strip_whitespace(identity) == "" {
   abort
 }
@@ -24,4 +24,22 @@ if strip_whitespace(insert_id) == "" {
 properties.distinct_id = identity
 properties.time = to_unix_timestamp(occurred_at, unit: "seconds")
 properties."$insert_id" = insert_id
+
+# Destination fields must come from the current contract, never legacy aliases
+# or caller-supplied Mixpanel properties.
+del(properties.session_id)
+session = string(attributes."session.id") ?? ""
+if strip_whitespace(session) != "" {
+  properties.session_id = session
+}
+del(properties."$latitude")
+del(properties."$longitude")
+latitude = attributes."geo.location.lat"
+longitude = attributes."geo.location.lon"
+if (is_float(latitude) || is_integer(latitude)) && (is_float(longitude) || is_integer(longitude)) {
+  properties."$latitude" = to_float!(latitude)
+  properties."$longitude" = to_float!(longitude)
+}
+# Disable IP-derived geography even when a session has no coordinates.
+properties.ip = 0
 . = {"event": name, "properties": properties}

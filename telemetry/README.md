@@ -1,7 +1,9 @@
 # Soundscape telemetry
 
-Vector receives the OTLP logs emitted by [Soundscape PR #326](https://github.com/soundscape-community/soundscape/pull/326)
-and converts them to Mixpanel events. This standalone project targets the **EU**
+Vector receives Soundscape OTLP logs and converts them to Mixpanel events,
+following the [app telemetry documentation](https://github.com/soundscape-community/soundscape/blob/e3eac218bcd357b9429ca7466692d4707d1ec780/apps/ios/Documentation/Telemetry.md)
+and [collector contract](https://github.com/soundscape-community/soundscape/blob/e3eac218bcd357b9429ca7466692d4707d1ec780/apps/ios/Documentation/TelemetryCollector.md)
+at commit `e3eac218bcd357b9429ca7466692d4707d1ec780`. This standalone project targets the **EU**
 Mixpanel project via `https://api-eu.mixpanel.com/import?strict=1`.
 Production is managed by Doco-CD; local development uses Docker Compose directly.
 
@@ -125,18 +127,26 @@ Vector uses native OTLP log decoding with legacy namespacing:
 | `eventName` / `event_name` | `event` |
 | resource attributes / `resources` | `properties` |
 | event `attributes` | `properties`, overriding resource attributes |
-| `attributes.user_id` | `properties.distinct_id` |
+| `attributes["app.installation.id"]` | `properties.distinct_id` |
 | occurrence timestamp | `properties.time`, integer Unix seconds |
 | nonempty `attributes.event_id` | `properties.$insert_id` |
-| `attributes.session_id` | `properties.session_id`, unchanged |
+| `attributes["session.id"]` | `properties.session_id` |
+| numeric `attributes["geo.location.lat"]` and `attributes["geo.location.lon"]` | `properties.$latitude` and `properties.$longitude`, floating-point pair |
+| collector constant | `properties.ip = 0`, disabling IP-derived geolocation |
 
 `event_id` also remains available as `properties.event_id`. Configure Mixpanel's
 session definition to use the event property **`session_id`**. This identifies a
-usage session; `distinct_id` continues to identify the client. Vector preserves
-the app's session UUID on retries and replay and does not generate sessions for
-older records that lack the attribute.
+usage session. Vector preserves the app's session UUID on retries and replay and
+omits `session_id` when `session.id` is missing, blank or not a string. A supplied
+legacy `session_id` does not override this mapping.
 
-In the updated PR, each app process starts a new session. Backgrounding, phone
+`distinct_id` is the app's random telemetry installation UUID, which rotates on
+the first telemetry-collecting session in each UTC calendar month. A session
+crossing the month boundary and delayed/replayed events retain their captured ID.
+Do not join old and new installation IDs. There is no fallback to `user_id`:
+records, including queued records, with only the legacy identity are dropped.
+
+Each app process starts a new session. Backgrounding, phone
 lock and ordinary inactivity keep it. Waking after at least 30 continuous minutes
 in Soundscape sleep/snooze starts a new session; shorter sleeps keep the old ID.
 Queued events retain the session captured at creation, even after a new session
@@ -144,10 +154,23 @@ starts.
 
 Mixpanel's reserved identity, timestamp and insertion ID are set after merging
 properties, overriding any caller-supplied values. Existing string properties,
-including `value`, remain strings. Resource keys such as `service.version` and
-`service.build` remain literal dotted property names. Missing or whitespace-only
+including `value`, remain strings; OTLP booleans, integers and doubles retain their
+types. Resource keys such as `service.version` and `app.build_id` remain literal
+dotted property names. Missing or whitespace-only
 event names and identities are dropped, with count diagnostics rather than raw
 records. No anonymous identity is invented.
+
+Coordinates represent an H3 resolution 7 cell centre captured once per consented
+session. Both coordinates must be numeric to populate Mixpanel's geographic
+properties. They are converted to floating-point without further rounding;
+numeric strings are not parsed. Original dotted attributes are retained.
+Caller-supplied `$latitude` and `$longitude` are removed before mapping, so missing
+or invalid pairs leave neither destination property. Every event sets numeric
+`ip=0`, overriding supplied IP values, so events without coordinates cannot inherit
+the collector's location. No user profiles or cross-month identity links are created.
+
+Event names are preserved without an allowlist. `session.snapshot` carries context;
+it is not an explicit session-start event.
 
 Without `event_id`, `$insert_id` is a SHA-256 hash of canonical JSON containing
 the name, original timestamp in nanoseconds, resources and attributes. It excludes
@@ -167,9 +190,11 @@ This uses only Docker with Compose and Python's standard library. It first check
 secret-path resolution for the default, an isolated `.env`, and the production
 environment override without changing any existing local configuration. It validates Vector with a
 dummy file secret, runs transform tests, and sends bodyless OTLP protobuf logs
-through a temporary receiver to a local mock import endpoint. It checks a batch
-of two events, Basic Auth, NDJSON, a forced 503 retry, stable event/session IDs
-through replay, and compatibility with older records without session IDs.
+through a temporary receiver to a local mock import endpoint. It checks gzip and
+uncompressed requests with multiple resource/scope groups, typed attributes,
+coordinate precision and absence, IP-geolocation suppression, Basic Auth, NDJSON,
+a forced 503 retry, and stable timestamps and event/session IDs through replay.
+Transform tests also cover invalid mappings and rejection of legacy-only identity.
 It uses Linux Docker host networking and temporary containers, with dynamically
 allocated ports; it does not start the normal Compose service or use its buffer.
 
@@ -190,22 +215,23 @@ In Mixpanel **Events → Live view**, look for `soundscape.telemetry_smoke_test`
 with `distinct_id=ops-smoke-test` and the printed `$insert_id`. API acceptance is
 automated; confirmation in Live view is a separate manual step.
 
-## iOS follow-up for PR #326
+## iOS configuration
 
-- The updated PR generates `event_id` once per event and captures `session_id`
+- The app generates `event_id` once per event and captures `session.id`
   at creation. Both are protected against caller/snapshot overrides and retained
   through persistence/replay. The collector maps the event UUID to `$insert_id`
   and forwards the session UUID as `session_id` without modification.
-- The PR's collector build settings are empty. Configure
+- The app's collector build settings default to empty. Configure
   `SOUNDSCAPE_OTEL_LOGS_ENDPOINT` as a reachable **HTTPS** URL ending in `/v1/logs`.
   The app rejects plain HTTP, so this local Compose listener alone is insufficient
   for device testing. Arrange HTTPS forwarding separately. The app documentation
   explains xcconfig URL escaping and optional headers. Never embed the Mixpanel
   token in the app.
-- The PR already sends identity (`user_id`), event name (`eventName`) and original
+- The app sends identity (`app.installation.id`), event name (`eventName`) and original
   timestamp. No app-side Mixpanel SDK or event schema registration is needed.
 
-Server ingress and Caddy configuration are deferred.
+The local Vector listener uses HTTP; production HTTPS forwarding is configured
+separately in [Caddy](../caddy/sites-enabled/otel.soundscape.services).
 
 References: [Vector OTLP source](https://vector.dev/docs/reference/configuration/sources/opentelemetry/),
 [Vector HTTP sink](https://vector.dev/docs/reference/configuration/sinks/http/),

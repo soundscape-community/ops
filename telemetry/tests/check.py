@@ -8,6 +8,7 @@ import argparse
 import base64
 import contextlib
 import hashlib
+import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -43,8 +44,20 @@ def field(number, value):
     return varint(number << 3 | 2) + varint(len(value)) + value
 
 
+def any_value(value):
+    if isinstance(value, bool):
+        return varint(2 << 3) + varint(int(value))
+    if isinstance(value, int):
+        return varint(3 << 3) + varint(value & ((1 << 64) - 1))
+    if isinstance(value, float):
+        return varint(4 << 3 | 1) + struct.pack('<d', value)
+    if isinstance(value, str):
+        return field(1, value)
+    raise TypeError(f'Unsupported OTLP value type: {type(value).__name__}')
+
+
 def attributes(values):
-    return b''.join(field(1, field(1, k) + field(2, field(1, v))) for k, v in values.items())
+    return b''.join(field(1, field(1, k) + field(2, any_value(v))) for k, v in values.items())
 
 
 def log_record(name, values, timestamp=NS):
@@ -52,14 +65,21 @@ def log_record(name, values, timestamp=NS):
     record = varint(1 << 3 | 1) + struct.pack('<Q', timestamp)
     record += varint(2 << 3) + varint(9) + field(3, 'INFO') + field(12, name)
     for k, v in values.items():
-        record += field(6, field(1, k) + field(2, field(1, v)))
+        record += field(6, field(1, k) + field(2, any_value(v)))
     return record
 
 
+def resource_logs(scopes):
+    resource = attributes({'service.name': 'soundscape', 'service.version': 'test', 'app.build_id': '0'})
+    groups = b''
+    for index, records in enumerate(scopes):
+        scope = field(1, field(1, f'GDATelemetry-{index}'))
+        groups += field(2, scope + b''.join(field(2, record) for record in records))
+    return field(1, field(1, resource) + groups)
+
+
 def request_body(records):
-    resource = attributes({'service.name': 'soundscape', 'service.version': 'test', 'service.build': '0'})
-    scope = field(1, field(1, 'GDATelemetry'))
-    return field(1, field(1, resource) + field(2, scope + b''.join(field(2, r) for r in records)))
+    return resource_logs([records])
 
 
 def free_port():
@@ -85,16 +105,20 @@ def ready(port):
         return False
 
 
-def post(port, body):
+def post(port, body, compressed=False):
+    headers = {'Content-Type': 'application/x-protobuf'}
+    if compressed:
+        body = gzip.compress(body)
+        headers['Content-Encoding'] = 'gzip'
     request = urllib.request.Request(f'http://127.0.0.1:{port}/v1/logs', body,
-                                     {'Content-Type': 'application/x-protobuf'})
+                                     headers)
     with urllib.request.urlopen(request, timeout=10) as response:
         assert response.status == 200
 
 
 def unit_tests():
     base = {'event_name': 'screen_view', 'timestamp': '2026-05-28T20:26:40.123456789Z',
-            'attributes': {'user_id': 'test-user', 'screen_name': 'home'},
+            'attributes': {'app.installation.id': 'test-installation', 'screen_name': 'home'},
             'resources': {'service.name': 'soundscape'}}
     tests = []
 
@@ -114,15 +138,16 @@ def unit_tests():
     expected = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     case('bodyless screen event and canonical hash', base, [
         '.event == "screen_view" && .properties.screen_name == "home"',
-        '.properties.distinct_id == "test-user" && .properties.time == 1780000000',
+        '.properties.distinct_id == "test-installation" && .properties.time == 1780000000',
         '.properties."service.name" == "soundscape" && !exists(.timestamp)',
         f'.properties."$insert_id" == "{expected}"'])
     record = json.loads(json.dumps(base))
-    record['attributes'].update({'event_id': 'stable-uuid', 'session_id': 'usage-session',
+    record['attributes'].update({'event_id': 'stable-uuid', 'session.id': 'usage-session',
+                                 'session_id': 'spoof-session', 'user_id': 'legacy-user',
                                  'distinct_id': 'spoof', 'time': 'bad',
                                  '$insert_id': 'spoof', 'service.name': 'event-wins', 'value': '42'})
     case('reserved fields, explicit ID, strings and merge precedence', record, [
-        '.properties."$insert_id" == "stable-uuid" && .properties.distinct_id == "test-user"',
+        '.properties."$insert_id" == "stable-uuid" && .properties.distinct_id == "test-installation"',
         '.properties.time == 1780000000 && .properties."service.name" == "event-wins"',
         '.properties.value == "42"',
         '.properties.session_id == "usage-session" && .properties.event_id == "stable-uuid"'])
@@ -135,9 +160,49 @@ def unit_tests():
         record = dict(base)
         del record[key]
         case('missing ' + key, record)
-    for name, values in [('missing identity', {}), ('empty identity', {'user_id': '  '})]:
+    for name, values in [('missing identity', {}),
+                         ('empty identity', {'app.installation.id': '  '}),
+                         ('invalid identity', {'app.installation.id': 42}),
+                         ('legacy-only identity', {'user_id': 'legacy-user', 'session_id': 'legacy-session'})]:
         case(name, {**base, 'attributes': values})
     case('empty event name', {**base, 'event_name': ''})
+    case('whitespace event name', {**base, 'event_name': '  '})
+    for session in [None, '', '  ', 42, True]:
+        values = {**base['attributes'], 'session_id': 'legacy-session'}
+        if session is not None:
+            values['session.id'] = session
+        case(f'no mapped session for {session!r}', {**base, 'attributes': values}, [
+            '!exists(.properties.session_id)'])
+    for latitude, longitude in [(51.50123456789, -0.123456789), (51, 0)]:
+        values = {**base['attributes'], 'geo.location.lat': latitude, 'geo.location.lon': longitude,
+                  '$latitude': 1.0, '$longitude': 2.0, 'ip': '203.0.113.1'}
+        case(f'numeric coordinates {latitude}', {**base, 'attributes': values}, [
+            f'.properties."$latitude" == {float(latitude)} && .properties."$longitude" == {float(longitude)}',
+            'is_float(.properties."$latitude") && is_float(.properties."$longitude")',
+            '.properties.ip == 0',
+            f'.properties."geo.location.lat" == {latitude} && .properties."geo.location.lon" == {longitude}'])
+    for latitude, longitude in [(None, None), (51.5, None), (None, -0.1),
+                                ('51.5', -0.1), (51.5, '-0.1'), (True, -0.1)]:
+        values = {**base['attributes'], '$latitude': 1.0, '$longitude': 2.0, 'ip': '203.0.113.1'}
+        for key, value in [('geo.location.lat', latitude), ('geo.location.lon', longitude)]:
+            if value is not None:
+                values[key] = value
+        case(f'invalid coordinate pair {latitude!r}, {longitude!r}', {**base, 'attributes': values}, [
+            '!exists(.properties."$latitude") && !exists(.properties."$longitude")',
+            '.properties.ip == 0'])
+    values = {**base['attributes'], 'success': True, 'first_launch': False,
+              'error.code': -42, 'app.settings.voice.rate': 0.5123456789, 'value': '42'}
+    case('preserve attribute types', {**base, 'attributes': values}, [
+        '.properties.success == true && .properties.first_launch == false',
+        'is_integer(.properties."error.code") && .properties."error.code" == -42',
+        'is_float(.properties."app.settings.voice.rate") && .properties."app.settings.voice.rate" == 0.5123456789',
+        '.properties.value == "42"'])
+    # Conflicting resource destinations must also be cleared when sources are absent.
+    case('resource destinations cannot bypass mappings', {**base, 'resources': {
+        **base['resources'], 'session_id': 'spoof', '$latitude': 1.0, '$longitude': 2.0,
+        'ip': '203.0.113.1'}}, [
+        '!exists(.properties.session_id) && !exists(.properties."$latitude") && !exists(.properties."$longitude")',
+        '.properties.ip == 0'])
     return {'tests': tests}
 
 
@@ -239,10 +304,16 @@ def check_local():
             subprocess.run(command + ['test', '/etc/vector/vector.yaml', '/etc/vector/tests.json'], check=True)
             with vector(command):
                 wait_for(lambda: ready(port))
-                body = request_body([log_record('screen_view', {'user_id': 'test-user', 'screen_name': 'home',
-                                                              'event_id': 'original-event-uuid',
-                                                              'session_id': 'original-session-uuid'}),
-                                     log_record('test.value', {'user_id': 'test-user', 'value': '42'})])
+                body = resource_logs([
+                    [log_record('session.snapshot', {
+                        'app.installation.id': 'test-installation', 'event_id': 'original-event-uuid',
+                        'session.id': 'original-session-uuid', 'session_id': 'spoof-session',
+                        'geo.location.lat': 51.50123456789, 'geo.location.lon': -0.123456789,
+                        'success': True, 'first_launch': False, 'error.code': -42,
+                        'app.settings.voice.rate': 0.5123456789})],
+                    [log_record('test.value', {'app.installation.id': 'test-installation', 'value': '42'})],
+                ]) + resource_logs([[log_record('test.second_resource', {
+                    'app.installation.id': 'second-installation', 'event_id': 'second-resource-event'})]])
                 post(port, body)
                 wait_for(lambda: len(ImportMock.attempts) >= 2)
                 assert ImportMock.attempts[0] == ImportMock.attempts[1], 'Retry changed the request'
@@ -251,20 +322,37 @@ def check_local():
                 assert auth == 'Basic ' + base64.b64encode((TOKEN + ':').encode()).decode()
                 assert content_type == 'application/x-ndjson'
                 events = [json.loads(line) for line in payload.splitlines()]
-                assert len(events) == 2, 'Expected a two-event NDJSON batch'
-                assert events[0]['event'] == 'screen_view'
+                assert len(events) == 3, 'Expected all events from two resources and three scopes'
+                assert events[0]['event'] == 'session.snapshot'
                 assert events[0]['properties']['time'] == NS // 1_000_000_000
                 assert events[0]['properties']['service.version'] == 'test'
                 assert events[0]['properties']['$insert_id'] == 'original-event-uuid'
                 assert events[0]['properties']['event_id'] == 'original-event-uuid'
                 assert events[0]['properties']['session_id'] == 'original-session-uuid'
-                assert 'session_id' not in events[1]['properties'], 'Do not invent sessions for older records'
+                assert 'session_id' not in events[1]['properties'], 'Do not invent missing sessions'
+                assert events[0]['properties']['distinct_id'] == 'test-installation'
+                assert events[0]['properties']['app.build_id'] == '0'
+                assert events[0]['properties']['$latitude'] == 51.50123456789
+                assert events[0]['properties']['$longitude'] == -0.123456789
+                assert isinstance(events[0]['properties']['$latitude'], float)
+                assert isinstance(events[0]['properties']['$longitude'], float)
+                assert events[0]['properties']['success'] is True
+                assert events[0]['properties']['first_launch'] is False
+                assert type(events[0]['properties']['error.code']) is int
+                assert events[0]['properties']['error.code'] == -42
+                assert events[0]['properties']['app.settings.voice.rate'] == 0.5123456789
+                assert events[2]['properties']['distinct_id'] == 'second-installation'
+                assert events[2]['properties']['$insert_id'] == 'second-resource-event'
+                for event in events:
+                    assert event['properties']['ip'] == 0
+                for event in events[1:]:
+                    assert '$latitude' not in event['properties'] and '$longitude' not in event['properties']
                 assert events[1]['properties']['value'] == '42'
                 assert events[0]['properties']['$insert_id'] != events[1]['properties']['$insert_id']
-                post(port, body)
+                post(port, body, compressed=True)
                 wait_for(lambda: len(ImportMock.attempts) >= 3)
                 assert payload == ImportMock.attempts[2][3], 'Replay changed event IDs or properties'
-        print('PASS: protobuf ingress, Basic Auth, NDJSON batch, 503 retry, event/session IDs preserved on replay')
+        print('PASS: plain/gzip protobuf, resource/scope batches, typed attributes, coordinates, Basic Auth, NDJSON, 503 retry and replay')
     finally:
         server.shutdown()
         server.server_close()
@@ -302,7 +390,7 @@ def check_live():
             with vector(command):
                 wait_for(lambda: ready(port))
                 post(port, request_body([log_record('soundscape.telemetry_smoke_test',
-                     {'user_id': 'ops-smoke-test', 'event_id': identifier, 'test_source': 'ops-vector'}, time.time_ns())]))
+                     {'app.installation.id': 'ops-smoke-test', 'event_id': identifier, 'test_source': 'ops-vector'}, time.time_ns())]))
                 wait_for(lambda: bool(responses))
                 status, result = responses[0]
                 assert status == 200 and result.get('num_records_imported') == 1, f'Import failed: HTTP {status}'
